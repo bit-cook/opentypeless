@@ -184,6 +184,36 @@ export function QaPanel() {
     };
   }, [i18n.language]);
 
+  // ── 用户点击浮窗时主动接管 keyboard focus（issue #205）────────────────
+  // QA 窗口创建时 focus:false（避免抢前台 app 焦点，让选区 Cmd+C 还能工作）。
+  // 代价是 Windows / Linux 上 webview 完全不接 keyboard focus —— 上面注册的
+  // keydown(Esc) 永远不触发。mac 上 nonactivating panel 仍允许 webview 内键盘
+  // 事件，所以原来 Esc 能用，但跨端语义不一致。修法：用户在浮窗上 pointerdown
+  // 时调 setFocus() 主动接管 key window —— 此后 Esc 全平台一致。
+  // 不在 mount 时 setFocus：那会复制 focus:true 副作用，破坏选区抓取。
+  useEffect(() => {
+    if (!isTauri) return;
+    let cancelled = false;
+    let getCurrentWindow:
+      | (() => { setFocus: () => Promise<void> })
+      | null = null;
+    void import('@tauri-apps/api/window').then(mod => {
+      if (cancelled) return;
+      getCurrentWindow = mod.getCurrentWindow;
+    });
+    const onPointerDown = () => {
+      if (!getCurrentWindow) return;
+      void getCurrentWindow().setFocus().catch(err => {
+        console.warn('[QaPanel] setFocus failed', err);
+      });
+    };
+    window.addEventListener('pointerdown', onPointerDown, true);
+    return () => {
+      cancelled = true;
+      window.removeEventListener('pointerdown', onPointerDown, true);
+    };
+  }, []);
+
   const onTogglePin = () => {
     const next = !pinned;
     setPinned(next);
